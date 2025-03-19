@@ -1,4 +1,4 @@
-MISTAL_API_KEY = "ваш АРi"
+MISTAL_API_KEY = "Ваш API"
 
 from mistralai import Mistral
 import base64
