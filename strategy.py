@@ -2,56 +2,58 @@ MISTAL_API_KEY = "ваш АРi"
 
 from mistralai import Mistral
 import base64
-from typing import List, Tuple, Dict
-from typing import Any
+from typing import List, Tuple, Dict, Any
 from abc import ABC, abstractmethod
 
-class MistralRequestStrategy(ABC):
+class RequestStrategy(ABC):
     """
-    Абстрактный клас для работы с API Mistral
+    Абстрактный класс, определяющий интерфейс для всех стратегий запросов.
     """
 
     @abstractmethod
-    def send(self, *args: Any, **kwargs: Any) -> dict:
+    def execute(self, text: str, model: str, history: list = None, image_path: str = None) -> dict:
+        """
+        Абстрактный метод для выполнения запроса.
+        Должен быть реализован в конкретных стратегиях.
+        """
         pass
 
-class TextRequest(MistralRequestStrategy):
+class TextRequestStrategy(RequestStrategy):
     """
-    Класс cnhfntubz отвечает за отправку текстовых запросов
+    Конкретная реализация стратегии для отправки текстовых запросов.
     """
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
         self.client = Mistral(api_key=self.api_key)
-        
-    def send(self, text: str, history: list = None,  model: str = "mistral-large-latest") -> dict:
+
+    def execute(self, text: str, model: str, history: list = None, image_path: str = None) -> dict:
         """
-        Основной метод отправки текстового запроса к API Mistral
+        Реализует отправку текстового запроса к API Mistral.
         """
         messages = []
         if history:
-            messages.extend
+            messages.extend(history)
+
+        messages.append({"role": "user", "content": text})
+
         response = self.client.chat.complete(
             model=model,
-            messages=[
-                {
-                    "role":"user",
-                    "content": text
-                }
-            ]
+            messages=messages
         )
-        #Формируем ответ в виде словаря для работы с историей чата 
+
+        # Формируем ответ в виде словаря для работы с историей чата
         result = {
             "role": "assistant",
             "content": response.choices[0].message.content
         }
 
         return result
-    
-class ImageRequest(MistralRequestStrategy):
+
+class ImageRequestStrategy(RequestStrategy):
     """
-    Класс отвечает за отправку запросов, включающих изображение.
+    Конкретная реализация стратегии для отправки запросов с изображением.
     """
-    def __init__(self, api_key: str) ->None:
+    def __init__(self, api_key: str) -> None:
         self.api_key = api_key
         self.client = Mistral(api_key=self.api_key)
 
@@ -66,25 +68,31 @@ class ImageRequest(MistralRequestStrategy):
         except Exception as e:
             print(f"Error: {e}")
             return ""
-    
-    def send(self, text: str, image_path: str, model: str = "pixtral-12b-2409") -> dict:
+
+    def execute(self, text: str, model: str, history: list = None, image_path: str = None) -> dict:
         """
-        Основной метод отравки мультимодального  запроса
+        Реализует отправку мультимодального запроса, объединяющего текст и изображение.
         """
+        if not image_path:
+            return {"error": "Image path is required for ImageRequestStrategy."}
+
         # Получаем изображение в формате base64
         base64_image = self.__encode_image(image_path)
+        if not base64_image:
+            return {"error": "Failed to encode image."}
+
         # Формируем сообщение для чата
         messages = [
             {
-                "role" : "user",
-                "content" : [
+                "role": "user",
+                "content": [
                     {
-                        "type" : "text",
-                        "text" : text
+                        "type": "text",
+                        "text": text
                     },
                     {
-                        "type" : "image_url",
-                        "image_url" : f"data:image/jpeg;base64,{base64_image}"
+                        "type": "image_url",
+                        "image_url": f"data:image/jpeg;base64,{base64_image}"
                     }
                 ]
             }
@@ -97,26 +105,22 @@ class ImageRequest(MistralRequestStrategy):
 
         # Формируем ответ в виде словаря для работы с историей чата
         result = {
-            "role" : "assistant", 
-            "content" : chat_response.choices[0].message.content
+            "role": "assistant",
+            "content": chat_response.choices[0].message.content
         }
 
         return result
-    
-# # text_request = TextRequest(api_key=MISTAL_API_KEY)
-# image_request = ImageRequest(api_key=MISTAL_API_KEY)
-# # text_response = text_request.send("Бонжур", model="mistral-large-latest")
-# # print(text_response)
-# image_response = image_request.send("что изображено на картинке", r"C:\Users\User-X\Desktop\Python\Request_to_Mistral\357d7153677451.593d686ecec5f.png", model= "pixtral-12b-2409")
-# print(image_response)
 
-class MistralRequesContext:
+class MistralRequestContext:
     """
-    Контекст для работы со стратегиями запросов к Мистрал
+    Контекст для работы со стратегиями запросов к Mistral
     Реализуется паттерн Стратегия
     """
-    def __init__(self, api_key: str)-> None:
-        pass
+    def __init__(self, strategy: RequestStrategy) -> None:
+        self.strategy = strategy
+
+    def execute_strategy(self, text: str, model: str, history: list = None, image_path: str = None) -> dict:
+        return self.strategy.execute(text, model, history, image_path)
 
 class ChatFacade:
     def __init__(self, api_key: str):
@@ -125,28 +129,30 @@ class ChatFacade:
             "text": ["mistral-large-latest"],
             "image": ["pixtral-12b-2409"]
         }
-        self.set_request: TextRequest | ImageRequest = self.__set_request()
-        self.model: str = self.__set_model()
+        self.request_context = self.__set_request()
+        self.model = self.__set_model()
         self.history = []
 
-    def __set_request(self) -> TextRequest | ImageRequest:
+    def __set_request(self) -> MistralRequestContext:
         """
-        Возвращает выбранный объект в зависимость от выбора пользователя
+        Возвращает выбранный объект в зависимости от выбора пользователя
         """
         mode = input("Введите режим запроса (1 - текстовый, 2 - с изображением): ")
 
         if mode == "1":
-            return TextRequest(api_key=self.api_key)
+            strategy = TextRequestStrategy(api_key=self.api_key)
         elif mode == "2":
-            return ImageRequest(api_key=self.api_key)
+            strategy = ImageRequestStrategy(api_key=self.api_key)
         else:
             raise ValueError("Неверный режим запроса")
 
+        return MistralRequestContext(strategy)
+
     def __set_model(self) -> str:
         """
-        Возвращается выбранную модель для запроса
+        Возвращает выбранную модель для запроса
         """
-        model_type = 'text' if isinstance(self.set_request, TextRequest) else 'image'
+        model_type = 'text' if isinstance(self.request_context.strategy, TextRequestStrategy) else 'image'
         model = input(f"Выберите модель из списка {self.models[model_type]}: ")
         if model not in self.models[model_type]:
             raise ValueError('Неверная модель')
@@ -160,10 +166,9 @@ class ChatFacade:
         user_message = {"role": "user", "content": text}
         # Получаем текущую историю
         current_history = [msg for _, msg in self.history]
-        if image_path:
-            response = self.set_request.send(text=text, image_path=image_path, model=self.model)
-        else:
-            response = self.set_request.send(text=text, model=self.model)
+
+        response = self.request_context.execute_strategy(text=text, model=self.model, history=current_history, image_path=image_path)
+
         # Обновляем историю
         self.history.append((text, user_message))
         self.history.append((text, response))
@@ -180,16 +185,13 @@ class ChatFacade:
                 print('До свидания!')
                 break
             image_path = None
-            if isinstance(self.set_request, ImageRequest):
+            if isinstance(self.request_context.strategy, ImageRequestStrategy):
                 image_path = input("Введите путь к изображению: ")
             response = self.ask_question(text=text, image_path=image_path if image_path else None)
 
             # Выводим последний ответ
             print(response)
 
+# Пример использования
 chat_facade = ChatFacade(api_key=MISTAL_API_KEY)
 chat_facade()
-
-chat_facade = ChatFacade(api_key=MISTAL_API_KEY)
-chat_facade()
-
