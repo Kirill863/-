@@ -129,28 +129,26 @@ class ChatFacade:
             "text": ["mistral-large-latest"],
             "image": ["pixtral-12b-2409"]
         }
-        self.request_context = self.__set_request()
-        self.model = self.__set_model()
+        self.text_strategy = TextRequestStrategy(api_key=self.api_key)
+        self.image_strategy = ImageRequestStrategy(api_key=self.api_key)
+        self.request_context = MistralRequestContext(self.text_strategy)
+        self.model = self.select_model()
         self.history = []
 
-    def __set_request(self) -> MistralRequestContext:
+    def change_strategy(self, strategy_type: str) -> None:
         """
-        Возвращает выбранный объект в зависимости от выбора пользователя
+        Метод для смены текущей стратегии запроса.
         """
-        mode = input("Введите режим запроса (1 - текстовый, 2 - с изображением): ")
-
-        if mode == "1":
-            strategy = TextRequestStrategy(api_key=self.api_key)
-        elif mode == "2":
-            strategy = ImageRequestStrategy(api_key=self.api_key)
+        if strategy_type == "text":
+            self.request_context = MistralRequestContext(self.text_strategy)
+        elif strategy_type == "image":
+            self.request_context = MistralRequestContext(self.image_strategy)
         else:
-            raise ValueError("Неверный режим запроса")
+            raise ValueError("Неверный тип стратегии. Выберите 'text' или 'image'.")
 
-        return MistralRequestContext(strategy)
-
-    def __set_model(self) -> str:
+    def select_model(self) -> str:
         """
-        Возвращает выбранную модель для запроса
+        Позволяет выбрать модель из списка, соответствующую текущей стратегии.
         """
         model_type = 'text' if isinstance(self.request_context.strategy, TextRequestStrategy) else 'image'
         model = input(f"Выберите модель из списка {self.models[model_type]}: ")
@@ -158,21 +156,32 @@ class ChatFacade:
             raise ValueError('Неверная модель')
         return model
 
-    def ask_question(self, text: str, image_path: str = None) -> dict:
+    def ask_question(self, text: str, model: str, image_path: str = None) -> dict:
         """
-        Основной метод для отправки запроса
+        Основной метод для отправки запроса.
+        Делегирует выполнение запроса текущей стратегии.
         """
-        # Создаем сообщение пользователя
-        user_message = {"role": "user", "content": text}
         # Получаем текущую историю
         current_history = [msg for _, msg in self.history]
 
-        response = self.request_context.execute_strategy(text=text, model=self.model, history=current_history, image_path=image_path)
+        response = self.request_context.execute_strategy(text=text, model=model, history=current_history, image_path=image_path)
 
         # Обновляем историю
-        self.history.append((text, user_message))
+        self.history.append((text, {"role": "user", "content": text}))
         self.history.append((text, response))
         return response
+
+    def get_history(self) -> list[tuple[str, dict]]:
+        """
+        Возвращает историю запросов и ответов.
+        """
+        return self.history
+
+    def clear_history(self) -> None:
+        """
+        Очищает историю сообщений.
+        """
+        self.history.clear()
 
     def __call__(self):
         """
@@ -184,10 +193,16 @@ class ChatFacade:
             if text.lower() == "exit":
                 print('До свидания!')
                 break
+
+            strategy_type = input("Введите тип стратегии (text или image): ")
+            self.change_strategy(strategy_type)
+
+            model = self.select_model()
             image_path = None
-            if isinstance(self.request_context.strategy, ImageRequestStrategy):
+            if strategy_type == "image":
                 image_path = input("Введите путь к изображению: ")
-            response = self.ask_question(text=text, image_path=image_path if image_path else None)
+
+            response = self.ask_question(text=text, model=model, image_path=image_path if image_path else None)
 
             # Выводим последний ответ
             print(response)
